@@ -7,7 +7,9 @@ const SOURCE_MODELS_DIR = path.join(ROOT_DIR, 'models');
 const PUBLIC_MODELS_DIR = path.join(ROOT_DIR, 'public', 'models');
 
 function formatCarName(filename) {
-  const base = filename.replace(/\.glb$/i, '');
+  const base = filename
+    .replace(/\.glb$/i, '')
+    .replace(/(?:[_-](?:opt|optimized|draco|compressed|lowpoly))+$/i, '');
   const cleaned = base
     .replace(/[_-]+/g, ' ')
     .replace(/\s+/g, ' ')

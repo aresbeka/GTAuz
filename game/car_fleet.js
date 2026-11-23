@@ -11,6 +11,7 @@
 
 import * as THREE from "../vendor/three.module.js";
 import { GLTFLoader } from "../vendor/GLTFLoader.js";
+import { DRACOLoader } from "../vendor/DRACOLoader.js";
 import { getOpenWorldTerrainHeight } from "../rig/kin.js";
 
 const TARGET_CAR_LENGTH_M = 4.45;
@@ -324,8 +325,25 @@ function normalizeLoadedCarScene(rawScene, envMap = null) {
   orientGroup.add(rawScene);
   wrapper.add(orientGroup);
 
+  // Hide exported collision/helper shells (e.g., GTA ColMesh_*) before measuring bounds
+  const helperMeshRe = /colmesh|collision_?mesh|shadow_?plane|hitbox/i;
+  rawScene.traverse((obj) => {
+    if (obj.isMesh && helperMeshRe.test(obj.name || "")) {
+      obj.visible = false;
+    }
+  });
+
   rawScene.updateMatrixWorld(true);
-  _box3.setFromObject(rawScene);
+  _box3.makeEmpty();
+  const _meshBox = new THREE.Box3();
+  rawScene.traverse((obj) => {
+    if (!obj.isMesh || !obj.visible) return;
+    _meshBox.setFromObject(obj);
+    if (!_meshBox.isEmpty()) _box3.union(_meshBox);
+  });
+  if (_box3.isEmpty()) {
+    _box3.setFromObject(rawScene);
+  }
   _box3.getSize(_size3);
 
   // Guard against degenerate/empty GLBs
@@ -339,7 +357,15 @@ function normalizeLoadedCarScene(rawScene, envMap = null) {
   }
 
   wrapper.updateMatrixWorld(true);
-  _box3.setFromObject(orientGroup);
+  _box3.makeEmpty();
+  orientGroup.traverse((obj) => {
+    if (!obj.isMesh || !obj.visible) return;
+    _meshBox.setFromObject(obj);
+    if (!_meshBox.isEmpty()) _box3.union(_meshBox);
+  });
+  if (_box3.isEmpty()) {
+    _box3.setFromObject(orientGroup);
+  }
   _box3.getCenter(_center3);
 
   // Center X/Z and snap bottom flush to Y = 0.000m
@@ -348,7 +374,15 @@ function normalizeLoadedCarScene(rawScene, envMap = null) {
   orientGroup.position.y -= _box3.min.y;
 
   wrapper.updateMatrixWorld(true);
-  _box3.setFromObject(wrapper);
+  _box3.makeEmpty();
+  wrapper.traverse((obj) => {
+    if (!obj.isMesh || !obj.visible) return;
+    _meshBox.setFromObject(obj);
+    if (!_meshBox.isEmpty()) _box3.union(_meshBox);
+  });
+  if (_box3.isEmpty()) {
+    _box3.setFromObject(wrapper);
+  }
   _box3.getSize(_size3);
 
   const carWidthM = Math.max(1.4, Math.min(2.6, _size3.x));
@@ -358,9 +392,11 @@ function normalizeLoadedCarScene(rawScene, envMap = null) {
   const detectedWheels = [];
   const wheelNameRe = /wheel|tire|tyre|rim|hub|roue|rad|rueda|ko.?l|g.?ildirak|balon|shina/i;
   const frontNameRe = /front|fl|fr|_f_|_f$|перед|old/i;
+  const _wheelBox = new THREE.Box3();
+  const _wheelSize = new THREE.Vector3();
 
   rawScene.traverse((obj) => {
-    if (obj.isMesh) {
+    if (obj.isMesh && obj.visible) {
       obj.castShadow = true;
       obj.receiveShadow = true;
       const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
@@ -373,7 +409,7 @@ function normalizeLoadedCarScene(rawScene, envMap = null) {
       }
     }
 
-    if (obj !== rawScene && wheelNameRe.test(obj.name || "")) {
+    if (obj !== rawScene && obj.visible && wheelNameRe.test(obj.name || "")) {
       // Avoid double-registering child mesh inside an already registered wheel group
       let ancestorRegistered = false;
       let p = obj.parent;
@@ -385,16 +421,22 @@ function normalizeLoadedCarScene(rawScene, envMap = null) {
         p = p.parent;
       }
       if (!ancestorRegistered) {
-        obj.getWorldPosition(_childWorldPos);
-        const isFront = frontNameRe.test(obj.name || "") || _childWorldPos.z < -0.25;
-        detectedWheels.push({
-          steerPivot: null,
-          spinNode: obj,
-          isFront,
-          baseRotX: obj.rotation.x,
-          baseRotY: obj.rotation.y,
-          radius: 0.36,
-        });
+        // Only spin compact individual wheel nodes (ignore merged multi-wheel or body+wheel meshes)
+        _wheelBox.setFromObject(obj);
+        _wheelBox.getSize(_wheelSize);
+        const maxDim = Math.max(_wheelSize.x, _wheelSize.y, _wheelSize.z);
+        if (maxDim > 0.15 && maxDim < 1.25) {
+          obj.getWorldPosition(_childWorldPos);
+          const isFront = frontNameRe.test(obj.name || "") || _childWorldPos.z < -0.25;
+          detectedWheels.push({
+            steerPivot: null,
+            spinNode: obj,
+            isFront,
+            baseRotX: obj.rotation.x,
+            baseRotY: obj.rotation.y,
+            radius: Math.max(0.24, Math.min(0.55, _wheelSize.y * 0.5)),
+          });
+        }
       }
     }
   });
@@ -412,7 +454,10 @@ export class CarFleetManager {
   constructor(scene, options = {}) {
     this.scene = scene;
     this.envMap = options.envMap || null;
+    this.dracoLoader = new DRACOLoader();
+    this.dracoLoader.setDecoderPath("./draco/gltf/");
     this.loader = new GLTFLoader();
+    this.loader.setDRACOLoader(this.dracoLoader);
 
     this.root = new THREE.Group();
     this.root.name = "CustomCarFleetRoot";

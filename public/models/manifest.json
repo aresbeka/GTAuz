@@ -1,6 +1,23 @@
 {
   "version": 1,
-  "generatedAt": "2026-11-23T10:21:25.100Z",
-  "count": 0,
-  "cars": []
+  "generatedAt": "2026-11-23T11:02:05.336Z",
+  "count": 2,
+  "cars": [
+    {
+      "id": "car_cobalt_opt_1",
+      "fileName": "cobalt_opt.glb",
+      "url": "./models/cobalt_opt.glb",
+      "name": "Cobalt",
+      "sizeBytes": 1075040,
+      "source": "models"
+    },
+    {
+      "id": "car_damas_opt_2",
+      "fileName": "damas_opt.glb",
+      "url": "./models/damas_opt.glb",
+      "name": "Damas",
+      "sizeBytes": 591756,
+      "source": "models"
+    }
+  ]
 }
