@@ -28,19 +28,45 @@ jobs:
         with:
           lfs: true
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
-      - name: Setup Java 17 (Temurin)
+      - name: Setup Java 21 (Temurin)
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
-          java-version: "17"
+          java-version: "21"
 
-      - name: Accept Android SDK Licenses
-        run: yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+      - name: Configure Pre-Installed Android SDK
+        shell: bash
+        run: |
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "Using Android SDK at: $SDK_DIR"
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+
+          SDKMANAGER=""
+          for candidate in \
+            "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" \
+            "$SDK_DIR/cmdline-tools/bin/sdkmanager" \
+            "$SDK_DIR/tools/bin/sdkmanager"; do
+            if [ -x "$candidate" ]; then
+              SDKMANAGER="$candidate"
+              break
+            fi
+          done
+
+          if [ -n "$SDKMANAGER" ]; then
+            echo "Found sdkmanager at: $SDKMANAGER"
+            set +o pipefail
+            yes | "$SDKMANAGER" --sdk_root="$SDK_DIR" --licenses > /dev/null 2>&1  true
+            set -o pipefail
+            "$SDKMANAGER" --sdk_root="$SDK_DIR" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          else
+            echo "Warning: sdkmanager not found; continuing with pre-installed SDK packages"
+          fi
 
       - name: Install web dependencies
         run: npm install
@@ -50,16 +76,19 @@ jobs:
           node tools/sync-models.mjs
           npm run build
           echo "=== Bundled Custom .glb Cars ==="
-          cat dist/models/manifest.json || true
+          cat dist/models/manifest.json  true
 
       - name: Install Capacitor Android tooling
         run: npm install --no-save @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7
 
       - name: Initialize & patch Capacitor Android project
+        env:
+          APP_NAME: ${{ github.event.inputs.app_name || 'Pelican Campus Cars' }}
         run: |
           if [ ! -d "android" ]; then
             npx cap add android
           fi
+          printf "sdk.dir=%s\n" "$ANDROID_HOME" > android/local.properties
           node tools/patch-android-capacitor.mjs
           npx cap sync android
 
