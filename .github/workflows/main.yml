@@ -1,0 +1,90 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: "Optional APK App Name override"
+        required: false
+        default: "Pelican Campus Cars"
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build 3D Car Game APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository (with Git LFS for .glb models)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Java 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Accept Android SDK Licenses
+        run: yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
+      - name: Install web dependencies
+        run: npm install
+
+      - name: Sync models/*.glb & build web game bundle
+        run: |
+          node tools/sync-models.mjs
+          npm run build
+          echo "=== Bundled Custom .glb Cars ==="
+          cat dist/models/manifest.json || true
+
+      - name: Install Capacitor Android tooling
+        run: npm install --no-save @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7
+
+      - name: Initialize & patch Capacitor Android project
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          node tools/patch-android-capacitor.mjs
+          npx cap sync android
+
+      - name: Build Android Debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Prepare APK output
+        run: |
+          mkdir -p release-apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk release-apk/PelicanCampusCars.apk
+          ls -lh release-apk/PelicanCampusCars.apk
+
+      - name: Upload Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PelicanCampusCars-APK
+          path: release-apk/PelicanCampusCars.apk
+          retention-days: 30
+
+      - name: Publish GitHub Release (on v* tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-apk/PelicanCampusCars.apk
+          generate_release_notes: true
