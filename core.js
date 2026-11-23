@@ -150,6 +150,33 @@ function detectSoftwareWebGLRenderer() {
 }
 
 /**
+ * Detects Android / iOS / Capacitor WebView mobile GPUs so we stay well inside mobile
+ * VRAM & GPU watchdog limits (disabling 4x MSAA HalfFloat PostFX FBOs, 4096 shadow maps,
+ * 156k unculled grass prewarms, and 16x anisotropy that cause webglcontextlost on phones).
+ */
+function detectMobileGpuDevice() {
+  try {
+    if (typeof window !== "undefined") {
+      if (window.Capacitor) return true;
+      const params = new URLSearchParams(window.location?.search || "");
+      if (params.get("mobile") === "1") return true;
+    }
+    if (typeof navigator !== "undefined") {
+      const ua = String(navigator.userAgent || "");
+      if (/Android|iPhone|iPad|iPod|Mobile|wv\)/i.test(ua)) return true;
+      if (
+        navigator.maxTouchPoints > 1 &&
+        typeof screen !== "undefined" &&
+        Math.min(screen.width || 9999, screen.height || 9999) <= 920
+      ) {
+        return true;
+      }
+    }
+  } catch (_err) {}
+  return false;
+}
+
+/**
  * Priority 0.3C: Fast HTTP binary fetch (`./assets/glb/<slug>.glb` or GStatic CDN) when served over `http:`/`https:`,
  * falling back seamlessly and silently (`0` console errors) to `decodeFn()` under `Origin: null` (`file://`),
  * offline, `window.__forceInlineGlb`, or 404.
@@ -1365,6 +1392,19 @@ export class DemoCore {
       await this._yieldPreloadFrame();
       this._reportPreload(70, STAGE_2_LABEL);
       await this._yieldPreloadFrame();
+    } else if (this.isMobileGpu) {
+      // On Android / mobile WebView GPUs, cap anisotropy to 2x and let textures upload lazily per visible zone
+      // so initial VRAM allocation stays safely below mobile GPU process limits.
+      for (let ti = 0; ti < texList.length; ti++) {
+        const tx = texList[ti];
+        if (tx && !tx.isCubeTexture) {
+          if (tx.anisotropy > 2) tx.anisotropy = 2;
+        }
+      }
+      this._reportPreload(62, STAGE_2_LABEL);
+      await this._yieldPreloadFrame();
+      this._reportPreload(70, STAGE_2_LABEL);
+      await this._yieldPreloadFrame();
     } else if (typeof this.renderer?.initTexture === "function" && texList.length > 0) {
       for (let ti = 0; ti < texList.length; ti++) {
         const tx = texList[ti];
@@ -1516,12 +1556,12 @@ export class DemoCore {
             new URLSearchParams(window.location?.search || "").get("skipLoader") === "1"
         );
 
-      if (isHeadlessAutomatedClock) {
-        // Automated virtual-clock headless capture/smoke tools compile lazily per deterministic frame;
-        // Frame-0 shadows & initial pose are baked immediately after reset below (`lines 1684+`).
-        this._reportPreload(78, STAGE_3_LABEL);
+      if (isHeadlessAutomatedClock || this.isMobileGpu) {
+        // On mobile Android/iOS WebView GPUs, skip the 10-frame cross-campus stress prewarm so we never
+        // trip Android's GPU watchdog/VRAM cap; shaders compile smoothly on demand at the starting bay.
+        this._reportPreload(80, STAGE_3_LABEL);
         await this._yieldPreloadFrame();
-        this._reportPreload(86, STAGE_3_LABEL);
+        this._reportPreload(89, STAGE_3_LABEL);
         await this._yieldPreloadFrame();
       } else if (useTinySwPrewarmViewport) {
         // CPU SwiftShader full shader-stability prewarm (`?forceLoader=1` or interactive SwiftShader):
@@ -1857,8 +1897,14 @@ export class DemoCore {
 
   _initRendererAndScene() {
     this.isSoftwareRenderer = detectSoftwareWebGLRenderer();
-    if (this.isSoftwareRenderer && typeof document !== "undefined") {
-      document.documentElement.classList.add("is-software-renderer");
+    this.isMobileGpu = !this.isSoftwareRenderer && detectMobileGpuDevice();
+    if (typeof document !== "undefined") {
+      if (this.isSoftwareRenderer) {
+        document.documentElement.classList.add("is-software-renderer");
+      }
+      if (this.isMobileGpu) {
+        document.documentElement.classList.add("is-mobile-gpu");
+      }
     }
 
     this._glContextLost = false;
@@ -1868,6 +1914,7 @@ export class DemoCore {
         (ev) => {
           ev.preventDefault();
           this._glContextLost = true;
+          this._showContextLostOverlay(true);
         },
         false
       );
@@ -1875,6 +1922,11 @@ export class DemoCore {
         "webglcontextrestored",
         () => {
           this._glContextLost = false;
+          this._showContextLostOverlay(false);
+          try {
+            this.resize();
+            this.renderer?.render?.(this.scene, this.camera);
+          } catch (_rErr) {}
         },
         false
       );
@@ -1883,8 +1935,8 @@ export class DemoCore {
     try {
       this.renderer = new THREE.WebGLRenderer({
         canvas: this.canvas,
-        antialias: !this.isSoftwareRenderer,
-        powerPreference: "high-performance",
+        antialias: !this.isSoftwareRenderer && !this.isMobileGpu,
+        powerPreference: this.isMobileGpu ? "default" : "high-performance",
         alpha: false,
       });
     } catch (_e) {
@@ -1905,7 +1957,11 @@ export class DemoCore {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.02;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = isCaptureSwCpu ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = isCaptureSwCpu
+      ? THREE.BasicShadowMap
+      : this.isMobileGpu
+        ? THREE.PCFShadowMap
+        : THREE.PCFSoftShadowMap;
     this._v5LightingFrameOpts.isSoftwareRenderer = Boolean(this.isSoftwareRenderer || isCaptureSwCpu);
 
     this.scene = new THREE.Scene();
@@ -1977,12 +2033,18 @@ export class DemoCore {
         (window.devicePixelRatio || 1) <= 1.05 &&
         (window.innerWidth || 1920) <= 1920
     );
-    const initStaticShadowMapSize = isFast1080pCpuShadow
-      ? 1536
+    const initStaticShadowMapSize = this.isMobileGpu
+      ? 1024
+      : isFast1080pCpuShadow
+        ? 1536
+        : this.isSoftwareRenderer || isCaptureSwCpu
+          ? 2048
+          : 4096;
+    const initDynamicShadowMapSize = this.isMobileGpu
+      ? 512
       : this.isSoftwareRenderer || isCaptureSwCpu
-        ? 2048
-        : 4096;
-    const initDynamicShadowMapSize = this.isSoftwareRenderer || isCaptureSwCpu ? 1024 : 2048;
+        ? 1024
+        : 2048;
     this.sunLight.shadow.mapSize.set(initStaticShadowMapSize, initStaticShadowMapSize);
     this.sunLight.shadow.camera.near = 2.0;
     this.sunLight.shadow.camera.far = 295.0;
@@ -2067,14 +2129,15 @@ export class DemoCore {
         halfExtentM: 64.0,
         dynamicShadowMapSize: initDynamicShadowMapSize,
         dynamicHalfExtentM: 10.5,
-        gymShadowMapSize: this.isSoftwareRenderer || isCaptureSwCpu ? 512 : 1024,
+        gymShadowMapSize: this.isSoftwareRenderer || isCaptureSwCpu || this.isMobileGpu ? 512 : 1024,
         enableHorizonAerialPerspective: false,
         bakeEnvironment: false,
       }
     );
 
-    // V7 Single-Pass Fused Cinema Post-FX on GPU; SwiftShader uses direct single-pass ACES + `opticsOverlay` (`0` offscreen depth FBO copy!)
-    if (typeof createCinemaPostFXPipeline === "function") {
+    // V7 Single-Pass Fused Cinema Post-FX on desktop GPU; mobile WebView skips offscreen HDR/depth FBOs completely
+    // and renders directly to the hardware backbuffer with ACES tone mapping + NDC vignette.
+    if (!this.isMobileGpu && typeof createCinemaPostFXPipeline === "function") {
       try {
         this.postFX = createCinemaPostFXPipeline(THREE, this.renderer, {
           isSoftwareRenderer: Boolean(this.isSoftwareRenderer || isCaptureSwCpu),
@@ -2088,6 +2151,8 @@ export class DemoCore {
       } catch (_err) {
         this.postFX = null;
       }
+    } else {
+      this.postFX = null;
     }
 
     // Install re-entrant outer render hook AFTER `configureAAASunShadowsAndAtmosphere` so both internal draws
@@ -3178,7 +3243,7 @@ export class DemoCore {
         );
         const pmrem = new THREE.PMREMGenerator(this.renderer);
         const sunsetDome = buildProceduralEnvDomeScene(true);
-        if (this.isSoftwareRenderer || isFast1080pBootSw) {
+        if (this.isSoftwareRenderer || isFast1080pBootSw || this.isMobileGpu) {
           this.sunsetEnvMap = pmrem.fromScene(sunsetDome.envScene, 0, 0.1, 100, { size: 64 }).texture;
           this.dayEnvMap = this.sunsetEnvMap;
         } else if (isCaptureSwCpuPmrem) {
@@ -4556,9 +4621,17 @@ diffuseColor.a *= vPuffAlpha;`
         : "high";
 
     this.qualityTier = tier;
-    this.maxDprForQuality = tier === "low" ? 1.0 : tier === "medium" ? 1.5 : 2.0;
+    this.maxDprForQuality = this.isMobileGpu
+      ? tier === "low"
+        ? 0.9
+        : 1.25
+      : tier === "low"
+        ? 1.0
+        : tier === "medium"
+          ? 1.5
+          : 2.0;
     if (tier === "high") {
-      this._governedRetinaDprCap = 2.0;
+      this._governedRetinaDprCap = this.isMobileGpu ? 1.25 : 2.0;
       this._dprFrameDeltaCount = 0;
       this._lastPerfNowMs = 0;
     }
@@ -4569,17 +4642,21 @@ diffuseColor.a *= vPuffAlpha;`
         this.renderer.getPixelRatio() <= 1.05 &&
         this.renderer.domElement.width <= 1920
     );
-    const targetShadowSize = isFast1080pCpuTier
-      ? 1536
-      : this.isSoftwareRenderer || this.isCaptureSwCpu
-        ? tier === "low"
-          ? 1024
-          : 2048
-        : tier === "high"
-          ? 4096
-          : tier === "medium"
-            ? 2048
-            : 1024;
+    const targetShadowSize = this.isMobileGpu
+      ? tier === "low"
+        ? 512
+        : 1024
+      : isFast1080pCpuTier
+        ? 1536
+        : this.isSoftwareRenderer || this.isCaptureSwCpu
+          ? tier === "low"
+            ? 1024
+            : 2048
+          : tier === "high"
+            ? 4096
+            : tier === "medium"
+              ? 2048
+              : 1024;
     if (
       this.sunLight &&
       (this.sunLight.shadow.mapSize.width !== targetShadowSize ||
@@ -4803,7 +4880,9 @@ diffuseColor.a *= vPuffAlpha;`
       Boolean(window.__externalClock === true || window.__virtualClock);
     const capDpr = isExternal
       ? Math.max(2.0, Math.min(4.0, rawDpr))
-      : Math.min(this.maxDprForQuality || 2.0, this._governedRetinaDprCap || 2.0);
+      : this.isMobileGpu
+        ? Math.min(this.maxDprForQuality || 1.25, 1.25)
+        : Math.min(this.maxDprForQuality || 2.0, this._governedRetinaDprCap || 2.0);
     const dpr = Math.min(rawDpr, capDpr);
     if (!this.canvas.__renderer) {
       this.canvas.__renderer = { setPixelRatio() {}, setSize() {} };
@@ -4816,6 +4895,34 @@ diffuseColor.a *= vPuffAlpha;`
     this.camera.updateProjectionMatrix();
     this.width = Math.round(cssW * dpr);
     this.height = Math.round(cssH * dpr);
+  }
+
+  _showContextLostOverlay(show) {
+    if (typeof document === "undefined") return;
+    let el = document.getElementById("webgl-context-lost-banner");
+    if (!show) {
+      if (el) el.remove();
+      return;
+    }
+    if (el) return;
+    el = document.createElement("div");
+    el.id = "webgl-context-lost-banner";
+    el.className = "webgl-recovery-overlay";
+    el.innerHTML =
+      '<div class="webgl-recovery-card">' +
+      '<div class="webgl-recovery-title">3D Graphics Reset</div>' +
+      '<div class="webgl-recovery-sub">GPU memory was reclaimed by Android. Tap below to restart the 3D scene.</div>' +
+      '<button type="button" class="webgl-recovery-btn">Reload 3D Scene</button>' +
+      "</div>";
+    const btn = el.querySelector("button");
+    if (btn) {
+      btn.addEventListener("click", () => {
+        try {
+          window.location.reload();
+        } catch (_) {}
+      });
+    }
+    document.body.appendChild(el);
   }
 
   /**
@@ -5865,9 +5972,9 @@ diffuseColor.a *= vPuffAlpha;`
         this.renderer.shadowMap.needsUpdate = true;
       }
 
-      // Spatial 14m x 14m frustum & distance culling for 156,000 grass tufts (zero blades removed!)
+      // Spatial 14m x 14m frustum & distance culling for grass tufts (tight mobile culling on Android/iOS)
       if (this.world?.v5Grass?.cullForCamera) {
-        this.world.v5Grass.cullForCamera(this.camera, isFast1080pSw);
+        this.world.v5Grass.cullForCamera(this.camera, isFast1080pSw || this.isMobileGpu);
       }
 
       // Priority 0.2: Distance-modulate local PointLight intensities via fixed-slot multiplexer across ALL renderers

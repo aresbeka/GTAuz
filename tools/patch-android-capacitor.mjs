@@ -50,8 +50,8 @@ async function patchMainActivity() {
 
   const code = `package com.pelicancampus.cars;
 
+import android.graphics.Color;
 import android.os.Bundle;
-import android.view.View;
 import android.view.WindowManager;
 import android.webkit.WebSettings;
 import androidx.core.view.WindowCompat;
@@ -71,12 +71,12 @@ public class MainActivity extends BridgeActivity {
     public void onStart() {
         super.onStart();
         if (this.bridge != null && this.bridge.getWebView() != null) {
+            this.bridge.getWebView().setBackgroundColor(Color.parseColor("#0D1017"));
             WebSettings settings = this.bridge.getWebView().getSettings();
             settings.setDomStorageEnabled(true);
             settings.setJavaScriptEnabled(true);
             settings.setMediaPlaybackRequiresUserGesture(false);
             settings.setAllowFileAccess(true);
-            this.bridge.getWebView().setLayerType(View.LAYER_TYPE_HARDWARE, null);
         }
     }
 

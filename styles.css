@@ -104,12 +104,58 @@ body.hud-hidden .hud-root {
   display: block;
   width: 100%;
   height: 100%;
+  background-color: #0d1117;
   cursor: grab;
   touch-action: none;
 }
 
 .stage-canvas:active {
   cursor: grabbing;
+}
+
+.webgl-recovery-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(13, 17, 23, 0.92);
+  padding: 20px;
+}
+
+.webgl-recovery-card {
+  max-width: 340px;
+  padding: 20px 22px;
+  border-radius: 16px;
+  background: rgba(24, 31, 44, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  text-align: center;
+  color: #f8fafc;
+}
+
+.webgl-recovery-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.webgl-recovery-sub {
+  font-size: 13px;
+  color: rgba(226, 232, 240, 0.78);
+  margin-bottom: 14px;
+  line-height: 1.4;
+}
+
+.webgl-recovery-btn {
+  padding: 9px 18px;
+  border-radius: 10px;
+  border: none;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 /* Section 8: Automatic Cursor Hide After 1.5s Idle in Story Auto-Pilot / Tour Mode */

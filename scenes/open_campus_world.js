@@ -1335,6 +1335,10 @@ export class OpenCampusWorld {
         document.documentElement?.classList?.contains("is-software-renderer")) ||
         (typeof window !== "undefined" && window.__CAPTURE_UNDERLYING_SWIFTSHADER__)
     );
+    this.isMobileGpu = Boolean(
+      typeof document !== "undefined" &&
+        document.documentElement?.classList?.contains("is-mobile-gpu")
+    );
 
     // Dynamic update handles
     this.skyDome = null;
@@ -1887,7 +1891,8 @@ export class OpenCampusWorld {
   // ============================================================================
   _buildInstanced3DGrassField() {
     this.v5Grass = createAAAInstancedGrassSystem(THREE, {
-      maxDrawRadiusM: 96.0,
+      bladeCount: this.isMobileGpu ? 16000 : undefined,
+      maxDrawRadiusM: this.isMobileGpu ? 42.0 : 96.0,
     });
     this.grassFieldMesh = this.v5Grass.mesh;
     this.grassUniforms = this.v5Grass.uniforms;
