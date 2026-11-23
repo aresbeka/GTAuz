@@ -105,9 +105,56 @@ public class MainActivity extends BridgeActivity {
   console.log('[patch-android] Patched MainActivity.java (immersive fullscreen + WebGL hardware layer)');
 }
 
+async function patchGradleProperties() {
+  const propsPath = path.join(ANDROID_DIR, 'gradle.properties');
+  try {
+    let props = await fs.readFile(propsPath, 'utf-8');
+    if (props.includes('org.gradle.jvmargs=')) {
+      props = props.replace(
+        /org\.gradle\.jvmargs=.*/g,
+        'org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8'
+      );
+    } else {
+      props += '\norg.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8\n';
+    }
+    await fs.writeFile(propsPath, props, 'utf-8');
+    console.log('[patch-android] Patched gradle.properties (-Xmx3072m for 3D .glb assets)');
+  } catch {
+    // Ignore if missing
+  }
+}
+
+async function patchAppName() {
+  const customName = (process.env.APP_NAME || '').trim();
+  if (!customName) return;
+  const stringsPath = path.join(ANDROID_DIR, 'app', 'src', 'main', 'res', 'values', 'strings.xml');
+  try {
+    let xml = await fs.readFile(stringsPath, 'utf-8');
+    const escaped = customName
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/'/g, "\\'");
+    xml = xml.replace(
+      /<string name="app_name">.*?<\/string>/g,
+      `<string name="app_name">${escaped}</string>`
+    );
+    xml = xml.replace(
+      /<string name="title_activity_main">.*?<\/string>/g,
+      `<string name="title_activity_main">${escaped}</string>`
+    );
+    await fs.writeFile(stringsPath, xml, 'utf-8');
+    console.log(`[patch-android] Applied app_name="${customName}"`);
+  } catch {
+    // Ignore if missing
+  }
+}
+
 async function main() {
   await patchAndroidManifest();
   await patchMainActivity();
+  await patchGradleProperties();
+  await patchAppName();
 }
 
 main().catch((err) => {
